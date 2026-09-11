@@ -53,8 +53,29 @@ h1{font-size:34px;margin:11px 0 4px}h2{font-size:30px}.muted{color:var(--muted)}
 const URL_="https://smsioabhcyoyfppgxhur.supabase.co";
 const KEY="sb_publishable_MzcFHyscCiRLGvbF3es1HA_R8ow0LWS";
 const BUCKET="bluemoon-media";
-const ST=JSON.parse(localStorage.getItem("bm_session")||sessionStorage.getItem("bm_session")||"null");
+function readStoredSession(){
+  const raw=localStorage.getItem("bm_session")||sessionStorage.getItem("bm_session");
+  if(!raw)return null;
+  try{
+    const x=JSON.parse(raw);
+    // Migrate an older session that lived only in sessionStorage so closing/swiping
+    // the PWA does not unexpectedly sign the user out.
+    if(!localStorage.getItem("bm_session")&&x?.refresh_token) localStorage.setItem("bm_session",raw);
+    return x;
+  }catch{return null}
+}
+let ST=readStoredSession();
 const S={page:"home",user:null,profile:null,couple:null,reminders:[],days:[],memories:[],pets:[],petServices:{},messages:[],memoryPhotos:{},exerciseLogs:[],exerciseEnabled:false};
+function coupleStorageKey(uid){return "bm_active_couple_"+uid}
+function saveSession(sess){
+  const raw=JSON.stringify(sess);
+  localStorage.setItem("bm_session",raw);
+  sessionStorage.removeItem("bm_session");
+  ST=sess;
+}
+function clearSession(){localStorage.removeItem("bm_session");sessionStorage.removeItem("bm_session");ST=null}
+function saveActiveCouple(id){if(S.user?.id&&id)localStorage.setItem(coupleStorageKey(S.user.id),id)}
+function getActiveCoupleId(){return S.user?.id?localStorage.getItem(coupleStorageKey(S.user.id)):null}
 
 function el(id){return document.getElementById(id)}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
@@ -77,11 +98,30 @@ async function authUser(token){
  if(!r.ok) throw new Error("Supabase Auth HTTP "+r.status);
  return r.json();
 }
-async function api(path,opts={}){
+let refreshPromise=null;
+async function refreshSession(){
+  const current=ST||readStoredSession();
+  if(!current?.refresh_token)throw new Error("ไม่มี refresh token");
+  if(refreshPromise)return refreshPromise;
+  refreshPromise=(async()=>{
+    const r=await fetchWithTimeout(URL_+"/auth/v1/token?grant_type=refresh_token",{method:"POST",headers:{apikey:KEY,"Content-Type":"application/json"},body:JSON.stringify({refresh_token:current.refresh_token})},8000);
+    let d=null;try{d=await r.json()}catch{}
+    if(!r.ok||!d?.access_token)throw new Error(d?.error_description||d?.msg||"ไม่สามารถต่ออายุเซสชันได้");
+    saveSession({access_token:d.access_token,refresh_token:d.refresh_token||current.refresh_token});
+    S.user={...(d.user||{}),access_token:d.access_token};
+    return S.user;
+  })().finally(()=>{refreshPromise=null});
+  return refreshPromise;
+}
+async function api(path,opts={},retried=false){
  const headers=Object.assign({"apikey":KEY,"Content-Type":"application/json","Accept":"application/json"},opts.headers||{});
  if(!headers.Authorization&&S.user?.access_token)headers.Authorization="Bearer "+S.user.access_token;
  const r=await fetchWithTimeout(URL_+path,Object.assign({},opts,{headers}),8000);
  let data=null; try{data=await r.json()}catch{}
+ if(r.status===401&&!retried&&ST?.refresh_token){
+   await refreshSession();
+   return api(path,opts,true);
+ }
  if(!r.ok) throw new Error(data?.message||data?.msg||data?.error_description||data?.error||("HTTP "+r.status));
  return data;
 }
@@ -98,28 +138,33 @@ async function registerPushSubscription(){if(!S.user||!S.couple||!("serviceWorke
 function stopRealtime(){if(window.__bmRealtime){try{window.__bmRealtime.close()}catch{}window.__bmRealtime=null}}
 function startRealtime(){stopRealtime();if(!S.user||!S.couple)return;try{const topic="realtime:bluemoon_"+S.couple.id,ws=new WebSocket("wss://smsioabhcyoyfppgxhur.supabase.co/realtime/v1/websocket?apikey="+encodeURIComponent(KEY)+"&vsn=1.0.0");window.__bmRealtime=ws;let ref=0;ws.onopen=()=>ws.send(JSON.stringify({topic,event:"phx_join",payload:{config:{broadcast:{ack:false,self:false},presence:{key:""},postgres_changes:[{event:"INSERT",schema:"public",table:"messages",filter:"couple_id=eq."+S.couple.id}],private:false},access_token:S.user.access_token},ref:String(++ref)}));ws.onmessage=ev=>{try{const m=JSON.parse(ev.data),r=m.payload?.data?.record;if(m.event!=="postgres_changes"||!r?.id||r.couple_id!==S.couple.id||S.messages.some(x=>x.id===r.id))return;S.messages.push(r);S.messages.sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));if(S.page==="chat")render();if(r.sender_id!==S.user.id&&document.hidden)showBMNotification("💙 BlueMoon Days",r.content,"chat-"+r.id)}catch(e){}};ws.onclose=()=>{if(window.__bmRealtime===ws)setTimeout(startRealtime,5000)}}catch(e){console.warn("Realtime",e)}}
 async function boot(){
-  if(!ST?.access_token){renderLogin();return}
+  ST=readStoredSession();
+  if(!ST?.access_token&&!ST?.refresh_token){renderLogin();return}
   try{
-    const u=await withTimeout(authUser(ST.access_token),7000);
-    S.user={...u,access_token:ST.access_token};
+    let u;
+    try{u=await withTimeout(authUser(ST.access_token),7000)}
+    catch{u=await withTimeout(refreshSession(),9000)}
+    S.user={...u,access_token:S.user?.access_token||ST.access_token};
     await withTimeout(load(),9000);
-    if(!S.couple) renderSetup(); else {render();startRealtime()};
+    if(!S.couple) renderSetup(); else {render();startRealtime()}
   }catch(e){
-    localStorage.removeItem("bm_session");
+    clearSession();
     renderLogin();
-    setTimeout(()=>toast("เชื่อมต่อข้อมูลไม่สำเร็จ กรุณาเข้าสู่ระบบใหม่",true),100);
+    setTimeout(()=>toast("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่",true),100);
   }
 }
 function renderLogin(){el("root").innerHTML=`<div class="app"><div class="login"><div class="card"><div style="font-size:52px;text-align:center">🌙</div><h1 style="text-align:center">BlueMoon Days</h1><p class="muted" style="text-align:center">พื้นที่เล็ก ๆ สำหรับเรื่องที่ไม่อยากลืม</p><div class="notice success" style="text-align:center">“วันธรรมดาก็พิเศษได้ ถ้าได้อยู่ด้วยกัน 🤍”</div><div class="form" style="margin-top:12px"><div class="field"><label>Email</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label>Password</label><input id="pw" type="password" autocomplete="current-password"></div><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);padding:2px 4px"><input id="rememberMe" type="checkbox" checked style="width:17px;height:17px"> จดจำการเข้าสู่ระบบ</label><button class="btn" onclick="signIn()">เข้าสู่ระบบ</button><button class="btn ghost" onclick="signUp()">สร้างบัญชี</button></div></div></div></div>`}
-async function signIn(){try{const d=await api("/auth/v1/token?grant_type=password",{method:"POST",body:JSON.stringify({email:el("email").value.trim(),password:el("pw").value})});const sess=JSON.stringify({access_token:d.access_token,refresh_token:d.refresh_token});localStorage.removeItem("bm_session");sessionStorage.removeItem("bm_session");(document.getElementById("rememberMe")?.checked?localStorage:sessionStorage).setItem("bm_session",sess);S.user={...d.user,access_token:d.access_token};await load();renderSetupIfNeeded();startRealtime()}catch(e){toast(e.message,true)}}
-async function signUp(){try{const d=await api("/auth/v1/signup",{method:"POST",body:JSON.stringify({email:el("email").value.trim(),password:el("pw").value})});if(d.access_token){const sess=JSON.stringify({access_token:d.access_token,refresh_token:d.refresh_token});localStorage.setItem("bm_session",sess);sessionStorage.removeItem("bm_session");S.user={...d.user,access_token:d.access_token};await load();renderSetupIfNeeded();startRealtime()}else toast("สมัครสำเร็จ — เช็กอีเมลเพื่อยืนยัน แล้วเข้าสู่ระบบอีกครั้ง")}catch(e){toast(e.message,true)}}
+async function signIn(){try{const d=await api("/auth/v1/token?grant_type=password",{method:"POST",body:JSON.stringify({email:el("email").value.trim(),password:el("pw").value})});saveSession({access_token:d.access_token,refresh_token:d.refresh_token});S.user={...d.user,access_token:d.access_token};await load();renderSetupIfNeeded();startRealtime()}catch(e){toast(e.message,true)}}
+async function signUp(){try{const d=await api("/auth/v1/signup",{method:"POST",body:JSON.stringify({email:el("email").value.trim(),password:el("pw").value})});if(d.access_token){saveSession({access_token:d.access_token,refresh_token:d.refresh_token});S.user={...d.user,access_token:d.access_token};await load();renderSetupIfNeeded();startRealtime()}else toast("สมัครสำเร็จ — เช็กอีเมลเพื่อยืนยัน แล้วเข้าสู่ระบบอีกครั้ง")}catch(e){toast(e.message,true)}}
 async function load(forcedCid=null){
  const uid=S.user.id;
  try{S.profile=(await api("/rest/v1/users?id=eq."+encodeURIComponent(uid)+"&select=*&limit=1"))[0]||null}catch{}
  const ms=await api("/rest/v1/couple_members?user_id=eq."+encodeURIComponent(uid)+"&select=couple_id,role");
  if(!ms.length){S.couple=null;S.partner=null;return}
  // When joining another couple, always load the newly joined room instead of the first membership.
- const cid=forcedCid || (S.couple?.id && ms.some(x=>x.couple_id===S.couple.id) ? S.couple.id : ms[0].couple_id);
+ const savedCid=getActiveCoupleId();
+ const cid=forcedCid || (S.couple?.id && ms.some(x=>x.couple_id===S.couple.id) ? S.couple.id : (savedCid && ms.some(x=>x.couple_id===savedCid) ? savedCid : ms[0].couple_id));
+ saveActiveCouple(cid);
  S.couple=(await api("/rest/v1/couples?id=eq."+cid+"&select=*&limit=1"))[0]||null;
  S.members=await api("/rest/v1/couple_members?couple_id=eq."+cid+"&select=user_id,role");
  const other=S.members.find(x=>x.user_id!==uid);
@@ -184,7 +229,7 @@ async function loadPetServices(){
 
 function renderSetupIfNeeded(){if(!S.couple)renderSetup();else render()}
 function renderSetup(){el("root").innerHTML=`<div class="app"><div class="login"><div class="card"><div style="font-size:45px;text-align:center">🌙</div><h1>สร้างพื้นที่ของเรา</h1><p class="muted">ตั้งค่าครั้งแรก แล้วกลับมาแก้ได้ทุกเมื่อ</p><div class="form"><div class="field"><label>ชื่อคู่รัก</label><input id="cn" placeholder="เช่น First & Second"></div><div class="field"><label>วันที่เริ่มคบ</label><input id="cs" type="date"></div><div class="field"><label>ข้อความต้อนรับ</label><input id="cm" placeholder="Every little day, together."></div><button class="btn" onclick="createCouple()">Create Our Space</button></div><div style="margin-top:14px;padding-top:14px;border-top:1px solid #e8edf5"><b>มีรหัสจากแฟนอยู่แล้ว?</b><div class="tiny muted" style="margin:5px 0 10px">เข้าร่วมพื้นที่เดิมได้เลย ไม่ต้องสร้างห้องใหม่</div><div class="field"><label>Invite Code</label><input id="setupJoinCode" style="text-transform:uppercase" placeholder="เช่น A1B2C3D4"></div><button class="btn ghost" onclick="joinFromSetup()">เข้าร่วมพื้นที่ของแฟน</button></div></div></div></div>`}
-async function createCouple(){try{const code=Math.random().toString(36).slice(2,10).toUpperCase();const c=await api("/rest/v1/couples",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({couple_name:el("cn").value.trim(),start_date:el("cs").value||null,home_message:el("cm").value.trim()||null,show_pets:false,show_exercise:false,invite_code:code})}).then(a=>a[0]);await api("/rest/v1/couple_members",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({couple_id:c.id,user_id:S.user.id,role:"owner"})});await load();render()}catch(e){toast(e.message,true)}}
+async function createCouple(){try{const code=Math.random().toString(36).slice(2,10).toUpperCase();const c=await api("/rest/v1/couples",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({couple_name:el("cn").value.trim(),start_date:el("cs").value||null,home_message:el("cm").value.trim()||null,show_pets:false,show_exercise:false,invite_code:code})}).then(a=>a[0]);await api("/rest/v1/couple_members",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({couple_id:c.id,user_id:S.user.id,role:"owner"})});saveActiveCouple(c.id);await load(c.id);render()}catch(e){toast(e.message,true)}}
 function shell(content){const items=[["home","🏠","Home"],["reminders","⏰","Reminder"],["memories","💙","Memories"],["days","🕝","Days"],["chat","💬","Chat"]];return `<div class="app"><div class="top"><div class="brand">BlueMoon <span>Days</span></div><button class="ghost" style="width:40px;height:40px;border-radius:14px;padding:0" onclick="go('more')">✦</button></div><main>${content}</main><nav class="nav">${items.map(x=>`<button class="${S.page===x[0]?'active':''}" onclick="go('${x[0]}')"><span>${x[1]}</span>${x[2]}</button>`).join("")}</nav></div>`}
 function home(){
  const c=S.couple,rem=S.reminders.filter(r=>r.is_active&&!r.is_completed).slice(0,3);
@@ -621,8 +666,9 @@ async function joinByCode(code){
  if(!a.length)throw new Error("ไม่พบรหัสนี้");
  const target=a[0].id;
  const memberships=await api("/rest/v1/couple_members?user_id=eq."+encodeURIComponent(S.user.id)+"&select=couple_id");
- if(memberships.some(x=>x.couple_id===target)){await load(target);go("home");return}
+ if(memberships.some(x=>x.couple_id===target)){saveActiveCouple(target);await load(target);go("home");return}
  await api("/rest/v1/couple_members",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({couple_id:target,user_id:S.user.id,role:"member"})});
+ saveActiveCouple(target);
  await load(target);
  go("home");
  toast("เข้าร่วมพื้นที่ของแฟนแล้ว 💙");
@@ -630,7 +676,7 @@ async function joinByCode(code){
 window.joinCouple=async()=>{try{await joinByCode(el("jc")?.value)}catch(e){toast(e.message,true)}};
 window.joinFromSetup=async()=>{try{await joinByCode(el("setupJoinCode")?.value)}catch(e){toast(e.message,true)}};
 window.requestNotifications=async()=>{if(!("Notification"in window))return toast("เบราว์เซอร์นี้ไม่รองรับแจ้งเตือน",true);const p=await Notification.requestPermission();if(p!=="granted")return toast(p==="denied"?"การแจ้งเตือนถูกปฏิเสธ":"ยังไม่ได้อนุญาต",true);const ok=await registerPushSubscription();toast(ok?"เปิด Push Notification แล้ว 🔔":"เปิดแจ้งเตือนแล้ว แต่บันทึก Push ไม่สำเร็จ",!ok);await showBMNotification("💙 BlueMoon Days","ทดสอบแจ้งเตือนบนเครื่องนี้แล้ว","bm-test");if(ok){const r=await callPushFunction({type:"test",couple_id:S.couple.id});if(r?.ok)toast("ส่งทดสอบ Push จากเซิร์ฟเวอร์แล้ว 🚀")}};async function showBMNotification(title,body,tag){if(!("Notification" in window)||Notification.permission!=="granted")return;try{const reg=await navigator.serviceWorker?.ready;if(reg?.showNotification){await reg.showNotification(title,{body,icon:'icon-192.png',badge:'icon-192.png',tag:tag||'bluemoon'});return}}catch{}try{new Notification(title,{body,icon:'icon-192.png',tag:tag||'bluemoon'})}catch{}}function reminderKey(r){return 'bm_notified_'+r.id+'_'+normalizeStoredDate(r.reminder_date)+'_'+String(r.reminder_time||'').slice(0,5)}async function checkReminders(){if(!S.user||!S.couple||!S.reminders?.length)return;const now=new Date();for(const r of S.reminders){if(!r.is_active||r.is_completed||!r.reminder_date)continue;const g=normalizeStoredDate(r.reminder_date),tm=(r.reminder_time||'09:00').slice(0,5),due=new Date(g+'T'+tm+':00');if(Number.isNaN(due.getTime()))continue;if(now>=due&&now-due<36*60*60*1000){const k=reminderKey(r);if(!localStorage.getItem(k)){await showBMNotification('⏰ '+r.title,'ถึงเวลาแล้ว 💙',k);localStorage.setItem(k,'1')}}}};
-window.signOut=async()=>{localStorage.removeItem("bm_session");location.reload()};
+window.signOut=async()=>{clearSession();if(S.user?.id)localStorage.removeItem(coupleStorageKey(S.user.id));location.reload()};
 let lastChatIds=[];
 async function refreshChat(silent=false){
  if(!S.user||!S.couple)return;
