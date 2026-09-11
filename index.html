@@ -107,8 +107,12 @@ async function refreshSession(){
     const r=await fetchWithTimeout(URL_+"/auth/v1/token?grant_type=refresh_token",{method:"POST",headers:{apikey:KEY,"Content-Type":"application/json"},body:JSON.stringify({refresh_token:current.refresh_token})},8000);
     let d=null;try{d=await r.json()}catch{}
     if(!r.ok||!d?.access_token)throw new Error(d?.error_description||d?.msg||"ไม่สามารถต่ออายุเซสชันได้");
-    saveSession({access_token:d.access_token,refresh_token:d.refresh_token||current.refresh_token});
-    S.user={...(d.user||{}),access_token:d.access_token};
+    const next={access_token:d.access_token,refresh_token:d.refresh_token||current.refresh_token};
+    saveSession(next);
+    // Token refresh responses do not reliably include a complete user object.
+    // Re-fetch the authenticated user so boot never loses user.id after a restart.
+    const u=await authUser(d.access_token);
+    S.user={...u,access_token:d.access_token};
     return S.user;
   })().finally(()=>{refreshPromise=null});
   return refreshPromise;
@@ -134,7 +138,21 @@ function withTimeout(promise,ms=7000){
 const PUSH_VAPID_PUBLIC_KEY="BMcd0PJlvEVz3tdTD7qRIQwlCiV1SSsHSE2Vl2WYeqbzYFzut0eYNHwz1oMlGrJV7U_W6kiW0EHzWO8JhvSeXk8"; const EDGE_PUSH_URL=URL_+"/functions/v1/send-push";
 async function callPushFunction(payload){try{const r=await fetch(EDGE_PUSH_URL,{method:"POST",headers:{"Content-Type":"application/json",apikey:KEY,Authorization:"Bearer "+S.user.access_token},body:JSON.stringify(payload)});return await r.json().catch(()=>({ok:r.ok}))}catch(e){console.warn("Push function",e);return null}}
 function b64ToUint8Array(b){const pad="=".repeat((4-b.length%4)%4),raw=atob((b+pad).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
-async function registerPushSubscription(){if(!S.user||!S.couple||!("serviceWorker"in navigator)||!("PushManager"in window))return false;try{const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)});const j=sub.toJSON();await api("/rest/v1/push_subscriptions",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({user_id:S.user.id,couple_id:S.couple.id,endpoint:j.endpoint,p256dh:j.keys?.p256dh,auth:j.keys?.auth,user_agent:navigator.userAgent})});return true}catch(e){console.warn("Push subscription",e);return false}}
+async function registerPushSubscription(){
+ if(!S.user||!S.couple||!("serviceWorker"in navigator)||!("PushManager"in window))throw new Error("อุปกรณ์นี้ยังไม่รองรับ Web Push");
+ try{
+   const reg=await navigator.serviceWorker.ready;
+   let sub=await reg.pushManager.getSubscription();
+   if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)});
+   const j=sub.toJSON();
+   const endpoint=j.endpoint;
+   const p256dh=j.keys?.p256dh;
+   const auth=j.keys?.auth;
+   if(!endpoint||!p256dh||!auth)throw new Error("เครื่องนี้สร้าง Push subscription ไม่ครบ");
+   await api("/rest/v1/push_subscriptions?on_conflict=endpoint",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({user_id:S.user.id,couple_id:S.couple.id,endpoint,p256dh,auth,user_agent:navigator.userAgent})});
+   return true;
+ }catch(e){console.warn("Push subscription",e);throw e}
+}
 function stopRealtime(){if(window.__bmRealtime){try{window.__bmRealtime.close()}catch{}window.__bmRealtime=null}}
 function startRealtime(){stopRealtime();if(!S.user||!S.couple)return;try{const topic="realtime:bluemoon_"+S.couple.id,ws=new WebSocket("wss://smsioabhcyoyfppgxhur.supabase.co/realtime/v1/websocket?apikey="+encodeURIComponent(KEY)+"&vsn=1.0.0");window.__bmRealtime=ws;let ref=0;ws.onopen=()=>ws.send(JSON.stringify({topic,event:"phx_join",payload:{config:{broadcast:{ack:false,self:false},presence:{key:""},postgres_changes:[{event:"INSERT",schema:"public",table:"messages",filter:"couple_id=eq."+S.couple.id}],private:false},access_token:S.user.access_token},ref:String(++ref)}));ws.onmessage=ev=>{try{const m=JSON.parse(ev.data),r=m.payload?.data?.record;if(m.event!=="postgres_changes"||!r?.id||r.couple_id!==S.couple.id||S.messages.some(x=>x.id===r.id))return;S.messages.push(r);S.messages.sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));if(S.page==="chat")render();if(r.sender_id!==S.user.id&&document.hidden)showBMNotification("💙 BlueMoon Days",r.content,"chat-"+r.id)}catch(e){}};ws.onclose=()=>{if(window.__bmRealtime===ws)setTimeout(startRealtime,5000)}}catch(e){console.warn("Realtime",e)}}
 async function boot(){
@@ -142,9 +160,13 @@ async function boot(){
   if(!ST?.access_token&&!ST?.refresh_token){renderLogin();return}
   try{
     let u;
-    try{u=await withTimeout(authUser(ST.access_token),7000)}
-    catch{u=await withTimeout(refreshSession(),9000)}
-    S.user={...u,access_token:S.user?.access_token||ST.access_token};
+    try{
+      u=await withTimeout(authUser(ST.access_token),7000);
+      S.user={...u,access_token:ST.access_token};
+    }catch{
+      u=await withTimeout(refreshSession(),12000);
+      S.user={...u,access_token:ST.access_token};
+    }
     await withTimeout(load(),9000);
     if(!S.couple) renderSetup(); else {render();startRealtime()}
   }catch(e){
@@ -675,7 +697,19 @@ async function joinByCode(code){
 }
 window.joinCouple=async()=>{try{await joinByCode(el("jc")?.value)}catch(e){toast(e.message,true)}};
 window.joinFromSetup=async()=>{try{await joinByCode(el("setupJoinCode")?.value)}catch(e){toast(e.message,true)}};
-window.requestNotifications=async()=>{if(!("Notification"in window))return toast("เบราว์เซอร์นี้ไม่รองรับแจ้งเตือน",true);const p=await Notification.requestPermission();if(p!=="granted")return toast(p==="denied"?"การแจ้งเตือนถูกปฏิเสธ":"ยังไม่ได้อนุญาต",true);const ok=await registerPushSubscription();toast(ok?"เปิด Push Notification แล้ว 🔔":"เปิดแจ้งเตือนแล้ว แต่บันทึก Push ไม่สำเร็จ",!ok);await showBMNotification("💙 BlueMoon Days","ทดสอบแจ้งเตือนบนเครื่องนี้แล้ว","bm-test");if(ok){const r=await callPushFunction({type:"test",couple_id:S.couple.id});if(r?.ok)toast("ส่งทดสอบ Push จากเซิร์ฟเวอร์แล้ว 🚀")}};async function showBMNotification(title,body,tag){if(!("Notification" in window)||Notification.permission!=="granted")return;try{const reg=await navigator.serviceWorker?.ready;if(reg?.showNotification){await reg.showNotification(title,{body,icon:'icon-192.png',badge:'icon-192.png',tag:tag||'bluemoon'});return}}catch{}try{new Notification(title,{body,icon:'icon-192.png',tag:tag||'bluemoon'})}catch{}}function reminderKey(r){return 'bm_notified_'+r.id+'_'+normalizeStoredDate(r.reminder_date)+'_'+String(r.reminder_time||'').slice(0,5)}async function checkReminders(){if(!S.user||!S.couple||!S.reminders?.length)return;const now=new Date();for(const r of S.reminders){if(!r.is_active||r.is_completed||!r.reminder_date)continue;const g=normalizeStoredDate(r.reminder_date),tm=(r.reminder_time||'09:00').slice(0,5),due=new Date(g+'T'+tm+':00');if(Number.isNaN(due.getTime()))continue;if(now>=due&&now-due<36*60*60*1000){const k=reminderKey(r);if(!localStorage.getItem(k)){await showBMNotification('⏰ '+r.title,'ถึงเวลาแล้ว 💙',k);localStorage.setItem(k,'1')}}}};
+window.requestNotifications=async()=>{
+ if(!("Notification"in window))return toast("เบราว์เซอร์นี้ไม่รองรับแจ้งเตือน",true);
+ try{
+   const p=await Notification.requestPermission();
+   if(p!=="granted")return toast(p==="denied"?"การแจ้งเตือนถูกปฏิเสธ — ไปเปิดที่ Settings ของ iPhone ได้":"ยังไม่ได้อนุญาต",true);
+   await registerPushSubscription();
+   toast("เปิด Push Notification แล้ว 🔔");
+   await showBMNotification("💙 BlueMoon Days","ทดสอบแจ้งเตือนบนเครื่องนี้แล้ว","bm-test");
+   const r=await callPushFunction({type:"test",couple_id:S.couple.id});
+   if(r?.ok)toast("ส่งทดสอบ Push จากเซิร์ฟเวอร์แล้ว 🚀");
+   else if(r?.error)toast("สมัคร Push แล้ว แต่เซิร์ฟเวอร์ทดสอบไม่สำเร็จ: "+r.error,true);
+ }catch(e){toast("เปิดแจ้งเตือนไม่สำเร็จ: "+(e?.message||e),true)}
+};async function showBMNotification(title,body,tag){if(!("Notification" in window)||Notification.permission!=="granted")return;try{const reg=await navigator.serviceWorker?.ready;if(reg?.showNotification){await reg.showNotification(title,{body,icon:'icon-192.png',badge:'icon-192.png',tag:tag||'bluemoon'});return}}catch{}try{new Notification(title,{body,icon:'icon-192.png',tag:tag||'bluemoon'})}catch{}}function reminderKey(r){return 'bm_notified_'+r.id+'_'+normalizeStoredDate(r.reminder_date)+'_'+String(r.reminder_time||'').slice(0,5)}async function checkReminders(){if(!S.user||!S.couple||!S.reminders?.length)return;const now=new Date();for(const r of S.reminders){if(!r.is_active||r.is_completed||!r.reminder_date)continue;const g=normalizeStoredDate(r.reminder_date),tm=(r.reminder_time||'09:00').slice(0,5),due=new Date(g+'T'+tm+':00');if(Number.isNaN(due.getTime()))continue;if(now>=due&&now-due<36*60*60*1000){const k=reminderKey(r);if(!localStorage.getItem(k)){await showBMNotification('⏰ '+r.title,'ถึงเวลาแล้ว 💙',k);localStorage.setItem(k,'1')}}}};
 window.signOut=async()=>{clearSession();if(S.user?.id)localStorage.removeItem(coupleStorageKey(S.user.id));location.reload()};
 let lastChatIds=[];
 async function refreshChat(silent=false){
