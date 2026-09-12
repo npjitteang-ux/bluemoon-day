@@ -327,6 +327,26 @@ function serviceRemaining(sv){
 function duration(s){const g=normalizeStoredDate(s),a=new Date(g+"T00:00:00"),b=new Date();let y=b.getFullYear()-a.getFullYear(),m=b.getMonth()-a.getMonth(),d=b.getDate()-a.getDate();if(d<0){m--;const prev=new Date(b.getFullYear(),b.getMonth(),0);d+=prev.getDate()}if(m<0){y--;m+=12}return `อยู่ด้วยกันมาแล้ว ${y} ปี ${m} เดือน ${d} วัน 🤍`}
 function nextAnniversary(s){const g=normalizeStoredDate(s),a=new Date(g+"T00:00:00"),n=new Date();let d=new Date(n.getFullYear(),a.getMonth(),a.getDate());if(d<new Date(n.getFullYear(),n.getMonth(),n.getDate()))d.setFullYear(d.getFullYear()+1);const days=Math.ceil((d-n)/86400000);return days===0?"วันนี้":`อีก ${days} วัน`}
 
+function days(){return `<section class="page active"><div class="pagehead"><button class="back" onclick="go('home')">←</button><h2>Important Days</h2></div><div class="section list">${S.days.length?S.days.map(d=>`<div class="card row"><div><b>${esc(d.title)}</b><div class="tiny muted">${displayThaiDate(d.event_date)}</div></div><span>✨</span></div>`).join(""):`<div class="empty"><b>ยังไม่มีวันสำคัญ</b>เพิ่มวันเกิด วันครบรอบ หรือวันพิเศษได้หมด</div>`}</div><div style="margin-top:10px"><button class="btn" onclick="openDay()">＋ เพิ่มวันสำคัญ</button></div></section>`}
+function chat(){const pn=S.partner?.name||S.partner?.display_name||S.partner?.full_name||S.partner?.username||S.partner?.email?.split("@")[0]||"คนรัก";const meName=S.profile?.name||S.profile?.display_name||S.profile?.full_name||S.profile?.username||S.profile?.email?.split("@")[0]||"ฉัน";const pa=S.partner?.avatar_url?`style="background-image:url('${esc(S.partner.avatar_url)}')"`:"";const bubbleName=m=>m.sender_id===S.user.id?meName:pn;return `<section class="page active"><div class="pagehead"><button class="back" onclick="go('home')">←</button><div class="chat-head-person"><div class="chat-head-avatar" ${pa}>${pa?"":"💙"}</div><div style="min-width:0"><div class="chat-head-name">${esc(pn)}</div><div class="chat-head-sub">Chat ของเรา</div></div></div></div><div class="chatbox">${S.messages.length?S.messages.map(m=>`<div class="bubble-row ${m.sender_id===S.user.id?'mine':''}"><div class="bubble"><div class="bubble-sender">${esc(bubbleName(m))}</div><div>${esc(m.content)}</div><div class="tiny muted">${new Date(m.created_at).toLocaleString("th-TH",{dateStyle:"short",timeStyle:"short"})}</div></div></div>`).join(''):`<div class="empty"><b>💬 ห้องคุยของเรา</b>ส่งข้อความสั้น ๆ หาแฟนได้ตรงนี้</div>`}</div><div class="chat-input"><input id="chatText" placeholder="พิมพ์ข้อความ..."><button class="btn" style="width:56px" onclick="sendMessage()">➤</button></div></section>`}
+function pets(){
+ return `<section class="page active"><div class="pagehead"><button class="back" onclick="go('home')">←</button><h2>Pets</h2></div>
+ <div class="card"><b>🐾 สัตว์เลี้ยงของเรา</b><p class="tiny muted">รูป · วันเกิด · อายุ · คอร์สฝาก</p><button class="btn" onclick="openPet()">＋ เพิ่มสัตว์เลี้ยง</button></div>
+ <div class="section list">${S.pets.length?S.pets.map(p=>{
+   const sv=(S.petServices[p.id]||[]).filter(x=>x.status!=="cancelled").sort((a,b)=>(a.end_date||"").localeCompare(b.end_date||"")).slice(-1)[0];
+   const pic=p.photo_url?`style="background-image:url('${esc(p.photo_url)}');color:transparent"`:"";
+   return `<div class="card">
+     <div class="row"><div class="avatar" ${pic}>🐾</div><div style="flex:1"><b>${esc(p.name)}</b><div class="tiny muted">${esc(p.species||"")} ${p.breed?"· "+esc(p.breed):""}</div></div></div>
+     <div class="grid" style="margin-top:11px">
+       <div class="card small"><b>🎂 วันเกิด</b><p>${displayThaiDate(p.birth_date)||"ยังไม่ระบุ"}</p></div>
+       <div class="card small"><b>🎈 อายุ</b><p>${calcPetAge(p.birth_date)||"ยังไม่ระบุ"}</p></div>
+     </div>
+     ${sv?`<div class="package" style="margin-top:10px"><div class="row"><b>📦 ${esc(sv.service_name||"คอร์สฝาก")}</b><span class="pill">${serviceRemaining(sv)} วันเหลือ</span></div><div class="tiny muted">${displayThaiDate(sv.start_date)} → ${displayThaiDate(sv.end_date)}</div><div class="progress" style="margin-top:8px"><div class="bar" style="width:${Math.min(100,Number(sv.total_days)?(serviceUsed(sv)/Number(sv.total_days))*100:0)}%"></div></div><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap"><button class="pill" onclick="openServiceManage('${sv.id}')">จัดการคอร์ส</button><button class="pill" onclick="pauseService('${sv.id}')">⏸ เลื่อน/หยุด</button><button class="pill" onclick="renewService('${p.id}')">↻ ต่ออายุ</button><button class="pill" onclick="cancelService('${sv.id}')">ยกเลิก</button></div></div>`:`<div class="package" style="margin-top:10px"><b>📦 ยังไม่มีคอร์สฝาก</b><div class="tiny muted">เพิ่มแพ็กเกจ 3 / 5 / 7 / 10 / 30 วันได้</div><button class="pill" style="margin-top:8px" onclick="openService('${p.id}')">＋ เพิ่มคอร์สฝาก</button></div>`}
+     ${p.personality?`<p class="tiny muted" style="margin-top:9px">${esc(p.personality)}</p>`:""}
+   </div>`;
+ }).join(""):`<div class="empty"><b>ยังไม่มีสัตว์เลี้ยง</b>เพิ่มได้เมื่อไหร่ก็ได้</div>`}</div></section>`;
+}
+
 function memories(){
   const arr=(S.memories||[]).slice().sort((a,b)=>String(b.memory_date||"").localeCompare(String(a.memory_date||"")));
   const cards=arr.map(m=>{
