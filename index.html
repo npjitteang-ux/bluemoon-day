@@ -151,7 +151,7 @@ async function registerPushSubscription(){
    const auth=j.keys?.auth;
    if(!endpoint||!p256dh||!auth)throw new Error("เครื่องนี้สร้าง Push subscription ไม่ครบ");
    const r=await callPushFunction({type:"subscribe",couple_id:S.couple.id,endpoint,p256dh,auth,user_agent:navigator.userAgent});
-   if(!r?.ok) throw new Error(r?.error||"เซิร์ฟเวอร์บันทึก Push subscription ไม่สำเร็จ");
+   if(!r?.ok) throw new Error(r?.error||r?.message||"เซิร์ฟเวอร์บันทึก Push subscription ไม่สำเร็จ");
    return true;
  }catch(e){console.warn("Push subscription",e);throw e}
 }
