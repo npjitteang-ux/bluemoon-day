@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}</script>
 <title>BlueMoon Days</title>
-<script>window.__BM_VERSION="V36";</script>
+<script>window.__BM_VERSION="V38";</script>
 <style>
 @font-face{font-family:ChubbyBoo;src:url('chubbyboo-medium.ttf') format('truetype');font-display:swap}
 :root{--bg:#f7f8fb;--card:#fff;--ink:#27334b;--muted:#8b94a7;--blue:#5572aa;--soft:#eaf0fa;--line:#e6ebf2;--shadow:0 10px 26px rgba(53,70,105,.08)}
@@ -675,7 +675,7 @@ window.cancelService=async serviceId=>{
   render();toast("ยกเลิกคอร์สแล้ว");
  }catch(e){toast(e.message,true)}
 };
-window.sendMessage=async()=>{try{const input=el("chatText"),text=input.value.trim();if(!text)return;input.disabled=true;const d=await api("/rest/v1/messages",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({couple_id:S.couple.id,sender_id:S.user.id,content:text})});S.messages.push(d[0]);render();await callPushFunction({type:"message",couple_id:S.couple.id,message_id:d[0].id,sender_id:S.user.id,content:text});setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i){i.focus();}},30);}catch(e){toast(e.message,true)}finally{const i=el("chatText");if(i)i.disabled=false}};
+window.sendMessage=async()=>{try{const input=el("chatText"),text=input.value.trim();if(!text)return;input.disabled=true;const d=await api("/rest/v1/messages",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({couple_id:S.couple.id,sender_id:S.user.id,content:text})});S.messages.push(d[0]);render();await callPushFunction({type:"message",couple_id:S.couple.id,message_id:d[0].id,sender_id:S.user.id,sender_name:S.profile?.name||S.profile?.display_name||S.profile?.full_name||S.user?.user_metadata?.name||S.user?.email?.split("@")[0]||"คนรัก",content:text});setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i){i.focus();}},30);}catch(e){toast(e.message,true)}finally{const i=el("chatText");if(i)i.disabled=false}};
 window.togglePetMode=async()=>{try{
 const next=!Boolean(S.couple?.show_pets);
 const d=await api("/rest/v1/couples?id=eq."+S.couple.id,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({show_pets:next})});
