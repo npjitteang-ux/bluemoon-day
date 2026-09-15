@@ -469,6 +469,7 @@ function petsPage(){
 function cycleName(uid){if(uid===S.user?.id)return S.profile?.name||S.profile?.display_name||S.profile?.full_name||S.user?.user_metadata?.name||S.user?.email?.split('@')[0]||'ฉัน';if(uid===S.partner?.id)return S.partner?.name||S.partner?.display_name||S.partner?.full_name||S.partner?.username||S.partner?.email?.split('@')[0]||'แฟน';return 'สมาชิก'}
 function cycleAvatar(uid){const p=uid===S.user?.id?S.profile:S.partner;return p?.avatar_url?`style="background-image:url('${esc(p.avatar_url)}')"`:''}
 function cycleFor(uid){return (S.cycleData||[]).find(x=>x.user_id===uid&&x.is_active!==false)||null}
+const pad=n=>String(n).padStart(2,'0');
 function addDaysISO(date,days){const d=new Date(date+'T00:00:00');d.setDate(d.getDate()+Number(days));return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
 function diffDays(a,b){return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000)}
 function cyclePrediction(c){if(!c?.last_period_start)return null;const start=normalizeStoredDate(c.last_period_start),len=Math.max(21,Math.min(45,Number(c.cycle_length)||28)),periodLen=Math.max(2,Math.min(10,Number(c.period_length)||5));const today=isoToday();let next=addDaysISO(start,len);let guard=0;while(next<=today&&guard<120){next=addDaysISO(next,len);guard++;}const ov=addDaysISO(next,-14);return {start,next,end:addDaysISO(next,periodLen-1),ov,fertileStart:addDaysISO(ov,-5),fertileEnd:addDaysISO(ov,1),len,periodLen}}
