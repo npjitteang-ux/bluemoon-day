@@ -554,17 +554,42 @@ async function pushCurrentLocation(pos){
       }catch(e){}
     }
     if(place) payload.place_label=place;
-    const d=await api('/rest/v1/couple_locations?on_conflict=user_id',{
-      method:'POST',
-      headers:{'Prefer':'resolution=merge-duplicates,return=representation'},
-      body:JSON.stringify(payload)
-    });
+
+    /* V65: no ON CONFLICT dependency.
+       Update the current user's existing row first; insert only when none exists. */
+    const existing=await api(
+      '/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+
+      '&user_id=eq.'+encodeURIComponent(S.user.id)+'&select=*'
+    );
+
+    let d=[];
+    if(Array.isArray(existing) && existing.length){
+      d=await api(
+        '/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+
+        '&user_id=eq.'+encodeURIComponent(S.user.id),
+        {
+          method:'PATCH',
+          headers:{'Prefer':'return=representation'},
+          body:JSON.stringify(payload)
+        }
+      );
+    }else{
+      d=await api('/rest/v1/couple_locations',{
+        method:'POST',
+        headers:{'Prefer':'return=representation'},
+        body:JSON.stringify(payload)
+      });
+    }
+
     if(Array.isArray(d)&&d[0]){
       S.locations=(S.locations||[]).filter(x=>x.user_id!==S.user.id).concat(d[0]);
     }else{
       S.locations=(S.locations||[]).filter(x=>x.user_id!==S.user.id).concat(payload);
     }
-    if(S.page==='location'){drawLocationMarkers();updateLocationLiveText();}
+    if(S.page==='location'){
+      drawLocationMarkers();
+      updateLocationLiveText();
+    }
   }catch(e){
     console.warn('pushCurrentLocation failed',e);
     toast('บันทึกตำแหน่งไม่ได้: '+e.message,true);
