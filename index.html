@@ -62,6 +62,19 @@ h1{font-size:34px;margin:11px 0 4px}h2{font-size:30px}.muted{color:var(--muted)}
 <input id="partnerFile" type="file" accept="image/*" hidden><input id="petFile" type="file" accept="image/*" hidden>
 
 <script>
+// V61 boot safety: never leave the app on the splash screen forever.
+setTimeout(function(){
+  var root=document.getElementById('root');
+  if(root && /กำลังเปิด BlueMoon Days/.test(root.innerText||'')){
+    root.innerHTML='<div class="app"><div class="login"><div class="card"><div style="font-size:52px;text-align:center">🌙</div><h1 style="text-align:center">BlueMoon Days</h1><p class="muted" style="text-align:center">เชื่อมต่อใช้เวลานานกว่าปกติ</p><button class="btn" onclick="location.reload()">ลองใหม่</button></div></div></div>';
+  }
+}, 10000);
+window.addEventListener('error',function(e){
+  console.error('BlueMoon fatal error',e.error||e.message);
+});
+window.addEventListener('unhandledrejection',function(e){
+  console.error('BlueMoon unhandled rejection',e.reason);
+});
 const URL_="https://smsioabhcyoyfppgxhur.supabase.co";
 const KEY="sb_publishable_MzcFHyscCiRLGvbF3es1HA_R8ow0LWS";
 const BUCKET="bluemoon-media";
