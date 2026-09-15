@@ -548,7 +548,7 @@ async function updateLocationLiveText(){
   }
 }
 
-function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}}
+async function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}}
 async function pushCurrentLocation(pos){
   if(!pos?.coords || !S.user?.id || !S.couple?.id) return;
   const c=pos.coords;
@@ -617,7 +617,7 @@ async function pushCurrentLocation(pos){
   }
 }
 
-function startLocationShare(){if(!navigator.geolocation)return toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง',true);navigator.geolocation.getCurrentPosition(pos=>{pushCurrentLocation(pos)},()=>toast('ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนนะ 📍',true),{enableHighAccuracy:true,timeout:15000,maximumAge:5000});if(locationWatchId!==null)navigator.geolocation.clearWatch(locationWatchId);locationWatchId=navigator.geolocation.watchPosition(pushCurrentLocation,e=>{}, {enableHighAccuracy:true,maximumAge:5000,timeout:20000});toast('เริ่มแชร์ตำแหน่งแล้ว 📍');setTimeout(refreshLocations,1200)}
+function startLocationShare(){if(!navigator.geolocation)return toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง',true);navigator.geolocation.getCurrentPosition(pos=>{pushCurrentLocation(pos)},()=>toast('ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนนะ 📍',true),{enableHighAccuracy:true,timeout:15000,maximumAge:5000});if(locationWatchId!==null)navigator.geolocation.clearWatch(locationWatchId);locationWatchId=navigator.geolocation.watchPosition(pushCurrentLocation,e=>{}, {enableHighAccuracy:true,maximumAge:5000,timeout:20000});toast('เริ่มแชร์ตำแหน่งแล้ว 📍');setTimeout(()=>refreshLocations(),1200)}
 async function stopLocationShare(){if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}try{const d=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&user_id=eq.'+encodeURIComponent(S.user.id),{method:'PATCH',headers:{'Prefer':'return=representation'},body:JSON.stringify({sharing:false,updated_at:new Date().toISOString()})});S.locations=(S.locations||[]).map(x=>x.user_id===S.user.id?(d?.[0]||{...x,sharing:false}):x);render();setTimeout(initLocationMap,0);toast('หยุดแชร์ตำแหน่งแล้ว');}catch(e){toast('หยุดแชร์ไม่ได้: '+e.message,true)}}
 
 let locationPollingTimer=null;
