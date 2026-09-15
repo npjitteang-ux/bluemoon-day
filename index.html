@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}</script>
 <title>BlueMoon Days</title>
-<script>window.__BM_VERSION="V58";</script>
+<script>window.__BM_VERSION="V60";</script>
 <style>
 @font-face{font-family:ChubbyBoo;src:url('chubbyboo-medium.ttf') format('truetype');font-display:swap}
 :root{--bg:#f7f8fb;--card:#fff;--ink:#27334b;--muted:#8b94a7;--blue:#5572aa;--soft:#eaf0fa;--line:#e6ebf2;--shadow:0 10px 26px rgba(53,70,105,.08)}
@@ -272,7 +272,6 @@ async function load(forcedCid=null){
  S.exerciseEnabled=Boolean(S.couple?.show_exercise);
  try{S.cycleData=await api("/rest/v1/menstrual_cycles?couple_id=eq."+cid+"&select=*&order=updated_at.desc");}catch(e){S.cycleData=[];} 
  try{S.cyclePeriods=await api("/rest/v1/menstrual_periods?couple_id=eq."+cid+"&select=*&order=start_date.desc,created_at.desc");}catch(e){S.cyclePeriods=[];} 
- try{S.locations=await api("/rest/v1/couple_locations?couple_id=eq."+cid+"&select=*&order=updated_at.desc");}catch(e){S.locations=[];} 
 
 }
 
@@ -519,7 +518,11 @@ async function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await 
 function startLocationShare(){if(!navigator.geolocation)return toast('อุปกรณ์นี้ไม่รองรับตำแหน่ง',true);navigator.geolocation.getCurrentPosition(pos=>{pushCurrentLocation(pos)},()=>toast('ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนนะ 📍',true),{enableHighAccuracy:true,timeout:15000,maximumAge:5000});if(locationWatchId!==null)navigator.geolocation.clearWatch(locationWatchId);locationWatchId=navigator.geolocation.watchPosition(pushCurrentLocation,e=>{}, {enableHighAccuracy:true,maximumAge:5000,timeout:20000});toast('เริ่มแชร์ตำแหน่งแล้ว 📍');setTimeout(refreshLocations,1000)}
 async function stopLocationShare(){if(locationWatchId!==null){navigator.geolocation.clearWatch(locationWatchId);locationWatchId=null}try{const d=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&user_id=eq.'+encodeURIComponent(S.user.id),{method:'PATCH',headers:{'Prefer':'return=representation'},body:JSON.stringify({sharing:false,updated_at:new Date().toISOString()})});S.locations=(S.locations||[]).map(x=>x.user_id===S.user.id?(d?.[0]||{...x,sharing:false}):x);render();setTimeout(initLocationMap,0);toast('หยุดแชร์ตำแหน่งแล้ว');}catch(e){toast('หยุดแชร์ไม่ได้: '+e.message,true)}}
 
-function render(){const f={home,reminders,memories,days,chat,pets,petsPage,more,cycles,location};el("root").innerHTML=shell((f[S.page]||home)());if(S.page==="location"){setTimeout(()=>{initLocationMap();startLocationPolling()},0)} if(S.page==="chat"){setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i)i.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage()}}},0)}}
+let locationPollingTimer=null;
+function stopLocationPolling(){if(locationPollingTimer){clearInterval(locationPollingTimer);locationPollingTimer=null;}}
+function startLocationPolling(){stopLocationPolling(); if(S.page!=="location")return; refreshLocations(); locationPollingTimer=setInterval(()=>{if(S.page==="location"&&!document.hidden)refreshLocations();},10000);}
+
+function render(){const f={home,reminders,memories,days,chat,pets,petsPage,more,cycles,location};el("root").innerHTML=shell((f[S.page]||home)());if(S.page==="location"){setTimeout(()=>{initLocationMap();refreshLocations();startLocationPolling()},0)} if(S.page==="chat"){setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i)i.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage()}}},0)}}
 function changePhoto(slot){el(slot==="cover"?"coverFile":slot==="me"?"meFile":slot==="partner"?"partnerFile":"petFile").click()}
 async function uploadPhoto(slot,input){
  const file=input.files?.[0];if(!file)return;
