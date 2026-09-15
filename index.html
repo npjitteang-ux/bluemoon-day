@@ -527,7 +527,28 @@ let locationWatchId=null,locationMap=null,locationMarkers={},locationMapTimer=nu
 function ensureLeaflet(){return new Promise((resolve,reject)=>{if(window.L)return resolve();if(!document.getElementById('leafletCss')){const css=document.createElement('link');css.id='leafletCss';css.rel='stylesheet';css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';document.head.appendChild(css)}if(document.getElementById('leafletJs')){const t=setInterval(()=>{if(window.L){clearInterval(t);resolve();}},50);setTimeout(()=>{clearInterval(t);window.L?resolve():reject(new Error('โหลดแผนที่ไม่ได้'))},8000);return;}const sc=document.createElement('script');sc.id='leafletJs';sc.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';sc.crossOrigin='';sc.onload=()=>resolve();sc.onerror=()=>reject(new Error('โหลดแผนที่ไม่ได้'));document.head.appendChild(sc);})}
 async function initLocationMap(){try{await ensureLeaflet();const box=el('locationMap');if(!box)return;locationMap=L.map(box,{zoomControl:true,attributionControl:true}).setView([13.7563,100.5018],10);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(locationMap);drawLocationMarkers();setTimeout(()=>locationMap.invalidateSize(),150)}catch(e){const box=el('locationMap');if(box)box.innerHTML='<div class="empty">เปิดแผนที่ไม่ได้ ลองรีเฟรชอีกครั้ง</div>'}}
 function drawLocationMarkers(){if(!locationMap)return;const rows=locationPeople().map(x=>locationFor(x.id)).filter(r=>r?.sharing&&r.latitude!=null&&r.longitude!=null);Object.values(locationMarkers).forEach(m=>m.remove());locationMarkers={};rows.forEach(r=>{const name=cycleName(r.user_id),m=L.marker([Number(r.latitude),Number(r.longitude)]).addTo(locationMap).bindPopup(`<b>${esc(name)}</b><br>${esc(locationLabel(r))}<br><span style="font-size:12px;color:#8b94a7">${esc(locationTimeText(r.updated_at))}</span>`);locationMarkers[r.user_id]=m});if(rows.length===1)locationMap.setView([Number(rows[0].latitude),Number(rows[0].longitude)],14);else if(rows.length>1){const b=L.latLngBounds(rows.map(r=>[Number(r.latitude),Number(r.longitude)]));locationMap.fitBounds(b,{padding:[30,30],maxZoom:15})}}
-async function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}}
+async function updateLocationLiveText(){
+  const me=locationFor(S.user?.id), pa=locationFor(S.partner?.id);
+  const km=haversineKm(me,pa);
+  const eta=etaText(km);
+  const cards=document.querySelectorAll('[data-location-user]');
+  cards.forEach(card=>{
+    const uid=card.getAttribute('data-location-user');
+    const r=locationFor(uid);
+    const place=card.querySelector('.location-meta-place');
+    const time=card.querySelector('.location-meta-time');
+    if(place) place.textContent=r?.sharing?locationLabel(r):'ยังไม่ได้แชร์ตำแหน่ง';
+    if(time) time.textContent=r?.sharing?locationTimeText(r.updated_at):'';
+  });
+  const etaEl=document.querySelector('.location-eta');
+  if(etaEl) etaEl.textContent=eta;
+  if(km!=null){
+    const sub=etaEl?.nextElementSibling;
+    if(sub && sub.classList.contains('tiny')) sub.textContent='ระยะห่างประมาณ '+(km<1?Math.round(km*1000)+' เมตร':km.toFixed(1)+' กม.')+' · คิดแบบคร่าว ๆ จากระยะทางตรง';
+  }
+}
+
+function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}}
 async function pushCurrentLocation(pos){
   if(!pos?.coords || !S.user?.id || !S.couple?.id) return;
   const c=pos.coords;
