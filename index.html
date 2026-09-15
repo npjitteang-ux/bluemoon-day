@@ -53,6 +53,12 @@ h1{font-size:34px;margin:11px 0 4px}h2{font-size:30px}.muted{color:var(--muted)}
 
 .location-map{height:340px;border-radius:20px;overflow:hidden;border:1px solid var(--line);background:#eef3f8}.location-map .leaflet-container{font-family:inherit}.location-person{display:flex;align-items:center;gap:10px}.location-dot{width:12px;height:12px;border-radius:50%;background:#5572aa;box-shadow:0 0 0 5px rgba(85,114,170,.12)}.location-meta{font-size:12px;color:var(--muted)}.location-eta{font-size:24px;font-weight:800;color:#5572aa}.location-status{font-size:13px;color:var(--muted)}
 </style>
+
+<style>
+.home-location-card{padding-bottom:14px}
+.home-location-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid rgba(0,0,0,.05)}
+.home-location-distance{margin-top:8px;padding:11px 12px;border-radius:14px;background:#f7f5fb}
+</style>
 </head>
 <body>
 <div id="root"><div class="app"><div class="login"><div class="card"><div class="spinner"></div><p style="text-align:center">กำลังเปิด BlueMoon Days…</p></div></div></div></div>
@@ -251,7 +257,8 @@ async function load(forcedCid=null){
    api("/rest/v1/memories?couple_id=eq."+cid+"&select=*&order=memory_date.desc"),
    api("/rest/v1/pets?couple_id=eq."+cid+"&is_active=eq.true&select=*&order=created_at.asc,id.asc"),
    api("/rest/v1/messages?couple_id=eq."+cid+"&select=*&order=created_at.asc"),
-   api("/rest/v1/exercise_logs?couple_id=eq."+cid+"&select=*&order=exercise_date.desc")
+   api("/rest/v1/exercise_logs?couple_id=eq."+cid+"&select=*&order=exercise_date.desc"),
+   api("/rest/v1/couple_locations?couple_id=eq."+cid+"&select=*&order=updated_at.desc")
  ]);
  S.reminders=results[0].status==="fulfilled"?results[0].value:[];
  S.days=results[1].status==="fulfilled"?results[1].value:[];
@@ -282,6 +289,7 @@ async function load(forcedCid=null){
  }
  S.messages=results[4].status==="fulfilled"?results[4].value:[];
  S.exerciseLogs=results[5]?.status==="fulfilled"?results[5].value:[];
+ S.locations=results[6]?.status==="fulfilled"?results[6].value:[];
  S.exerciseEnabled=Boolean(S.couple?.show_exercise);
  try{S.cycleData=await api("/rest/v1/menstrual_cycles?couple_id=eq."+cid+"&select=*&order=updated_at.desc");}catch(e){S.cycleData=[];} 
  try{S.cyclePeriods=await api("/rest/v1/menstrual_periods?couple_id=eq."+cid+"&select=*&order=start_date.desc,created_at.desc");}catch(e){S.cyclePeriods=[];} 
@@ -309,12 +317,30 @@ function renderSetup(){el("root").innerHTML=`<div class="app"><div class="login"
 async function saveMyName(name){name=(name||"").trim();if(!name)return;const d=await api("/rest/v1/users?id=eq."+encodeURIComponent(S.user.id),{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({name})});if(d?.[0]){S.profile=d[0];return d[0]}const c=await api("/rest/v1/users",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({id:S.user.id,name})});S.profile=c?.[0]||S.profile;return S.profile}
 async function createCouple(){try{await saveMyName(el("myName")?.value);const code=Math.random().toString(36).slice(2,10).toUpperCase();const c=await api("/rest/v1/couples",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({couple_name:el("cn").value.trim(),start_date:el("cs").value||null,home_message:el("cm").value.trim()||null,show_pets:false,show_exercise:false,invite_code:code})}).then(a=>a[0]);await api("/rest/v1/couple_members",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({couple_id:c.id,user_id:S.user.id,role:"owner"})});saveActiveCouple(c.id);await load(c.id);render()}catch(e){toast(e.message,true)}}
 function shell(content){const items=[["home","🏠","Home"],["reminders","⏰","Reminder"],["memories","💙","Memories"],["days","🕝","Days"],["chat","💬","Chat"]];return `<div class="app"><div class="top"><div class="brand">BlueMoon <span>Days</span></div><button class="ghost" style="width:40px;height:40px;border-radius:14px;padding:0" onclick="go('more')">✦</button></div><main>${content}</main><nav class="nav">${items.map(x=>`<button class="${S.page===x[0]?'active':''}" onclick="go('${x[0]}')"><span>${x[1]}</span>${x[2]}</button>`).join("")}</nav></div>`}
+
+function locationHomeCard(){
+ const people=locationPeople();
+ const rows=people.map(p=>({p,r:locationFor(p.id)}));
+ const shared=rows.filter(x=>x.r?.sharing && x.r?.latitude!=null && x.r?.longitude!=null);
+ const me=locationFor(S.user?.id), pa=locationFor(S.partner?.id);
+ const km=haversineKm(me,pa);
+ const both=me?.sharing&&pa?.sharing&&km!=null;
+ return `<div class="section card home-location-card">
+   <div class="head"><h3>📍 เราอยู่ไหน</h3><span class="link" onclick="go('location')">ดูรายละเอียด</span></div>
+   <div class="tiny muted" style="margin:-4px 0 8px">ตำแหน่งล่าสุดของเราสองคน</div>
+   ${rows.map(x=>`<div class="home-location-row" data-location-home-user="${x.p.id}">
+      <div><b>${esc(x.p.name)}</b><div class="tiny muted home-location-place">${x.r?.sharing?esc(locationLabel(x.r)):'ยังไม่ได้แชร์ตำแหน่ง'}</div></div>
+      <div class="tiny muted home-location-time">${x.r?.sharing?locationTimeText(x.r.updated_at):''}</div>
+   </div>`).join('')}
+   <div class="home-location-distance">${both?`💙 <b>${etaText(km)}</b><div class="tiny muted">ห่างกันประมาณ ${km<1?Math.round(km*1000)+' เมตร':km.toFixed(1)+' กม.'}</div>`:`🔒 แชร์ตำแหน่งของทั้งสองคนเพื่อดูระยะห่าง`}</div>
+ </div>`;
+}
 function home(){
  const c=S.couple,rem=[...(S.reminders||[])].filter(r=>r.is_active&&!r.is_completed).sort((a,b)=>{const A=reminderSortKey(a),B=reminderSortKey(b);return A.d.localeCompare(B.d)||A.t.localeCompare(B.t)||A.c.localeCompare(B.c)||A.id.localeCompare(B.id)}).slice(0,3);
  const cover=c?.cover_image_url?`background-image:url('${c.cover_image_url}')`:"";
  const me=S.profile?.avatar_url?`style="background-image:url('${S.profile.avatar_url}');color:transparent"`:"";
  const pa=S.partner?.avatar_url?`style="background-image:url('${S.partner.avatar_url}');color:transparent"`:(c?.partner_avatar_url?`style="background-image:url('${c.partner_avatar_url}');color:transparent"`:"");
- return `<section class="page active"><div class="card hero"><div class="cover" style="${cover}" onclick="changePhoto('cover')"><div class="tag">📷 เปลี่ยนรูปปก</div></div><div class="avatars"><div class="avatar" ${me} onclick="changePhoto('me')">👤</div><div class="avatar" ${pa} onclick="changePhoto('partner')">👤</div></div><h1>${esc(c?.couple_name||"ชื่อของเรา")}</h1><p class="muted">${c?.start_date?duration(c.start_date):"ตั้งค่าพื้นที่ของเราแล้ว"}</p></div><div class="section"><div class="head"><h3>🔔 วันนี้มีอะไรต้องจำ</h3><span class="link" onclick="go('reminders')">ดูทั้งหมด</span></div>${rem.length?`<div class="list">${rem.map(r=>`<div class="card rem"><div class="ri">${icon(r.category)}</div><div><b>${esc(r.title)}</b><p class="tiny muted">${reminderDisplayDate(r)}${r.reminder_time?" · "+esc(r.reminder_time.slice(0,5)):""}</p></div></div>`).join("")}</div>`:`<div class="empty"><b>ยังไม่มี Reminder</b>เพิ่มเรื่องที่ไม่อยากลืมไว้ตรงนี้ได้เลย</div>`}<div style="margin-top:9px"><button class="btn" onclick="openReminder()">＋ เพิ่ม Reminder</button></div></div><div class="section"><div class="head"><h3>วันสำคัญ</h3><span class="link" onclick="go('days')">ดูทั้งหมด</span></div><div class="grid"><div class="card small"><div style="font-size:25px">🤍</div><h4>วันครบรอบ</h4><p>${c?.start_date?nextAnniversary(c.start_date):"ยังไม่ได้ตั้งค่า"}</p></div><div class="card small"><div style="font-size:25px">🎂</div><h4>วันเกิด</h4><p>เพิ่มวันเกิดคนสำคัญ</p></div></div></div>${cycleHomeCard()}${c?.show_exercise?exerciseHome():""}${c?.show_pets&&S.pets.length?`<div class="section home-pets-section">
+ return `<section class="page active"><div class="card hero"><div class="cover" style="${cover}" onclick="changePhoto('cover')"><div class="tag">📷 เปลี่ยนรูปปก</div></div><div class="avatars"><div class="avatar" ${me} onclick="changePhoto('me')">👤</div><div class="avatar" ${pa} onclick="changePhoto('partner')">👤</div></div><h1>${esc(c?.couple_name||"ชื่อของเรา")}</h1><p class="muted">${c?.start_date?duration(c.start_date):"ตั้งค่าพื้นที่ของเราแล้ว"}</p></div>${locationHomeCard()}<div class="section"><div class="head"><h3>🔔 วันนี้มีอะไรต้องจำ</h3><span class="link" onclick="go('reminders')">ดูทั้งหมด</span></div>${rem.length?`<div class="list">${rem.map(r=>`<div class="card rem"><div class="ri">${icon(r.category)}</div><div><b>${esc(r.title)}</b><p class="tiny muted">${reminderDisplayDate(r)}${r.reminder_time?" · "+esc(r.reminder_time.slice(0,5)):""}</p></div></div>`).join("")}</div>`:`<div class="empty"><b>ยังไม่มี Reminder</b>เพิ่มเรื่องที่ไม่อยากลืมไว้ตรงนี้ได้เลย</div>`}<div style="margin-top:9px"><button class="btn" onclick="openReminder()">＋ เพิ่ม Reminder</button></div></div><div class="section"><div class="head"><h3>วันสำคัญ</h3><span class="link" onclick="go('days')">ดูทั้งหมด</span></div><div class="grid"><div class="card small"><div style="font-size:25px">🤍</div><h4>วันครบรอบ</h4><p>${c?.start_date?nextAnniversary(c.start_date):"ยังไม่ได้ตั้งค่า"}</p></div><div class="card small"><div style="font-size:25px">🎂</div><h4>วันเกิด</h4><p>เพิ่มวันเกิดคนสำคัญ</p></div></div></div>${cycleHomeCard()}${c?.show_exercise?exerciseHome():""}${c?.show_pets&&S.pets.length?`<div class="section home-pets-section">
 <div class="head"><h3>🐾 สัตว์เลี้ยง</h3><span class="link" onclick="go('petsPage')">ดูทั้งหมด</span></div>
 <div class="home-pets">${S.pets.slice(0,4).map(p=>{const pic=p.photo_url?`<img src="${esc(p.photo_url)}" data-pet-src="${esc(p.photo_url)}" alt="" onerror="petImgFallback(this)">`:`<div class="home-pet-placeholder">🐾</div>`;return `<button class="home-pet" onclick="openPetEdit('${p.id}')"><div class="home-pet-circle">${pic}</div><div class="home-pet-name">${esc(p.name)}</div></button>`}).join("")}</div>
 </div>`:""}<div class="section"><div class="head"><h3>🤍 ความทรงจำ</h3><span class="link" onclick="go('memories')">ดูทั้งหมด</span></div>${S.memories[0]?`<div class="card"><b>${esc(S.memories[0].title)}</b><div class="tiny muted">${displayThaiDate(S.memories[0].memory_date)}</div></div>`:`<div class="empty"><b>ยังไม่มีความทรงจำ</b>เก็บเรื่องเล็ก ๆ ของเราไว้ได้เลย</div>`}</div></section>`}
@@ -548,7 +574,27 @@ async function updateLocationLiveText(){
   }
 }
 
-async function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}}
+function updateHomeLocationLiveText(){
+  if(S.page!=="home") return;
+  const rows=locationPeople().map(p=>({p,r:locationFor(p.id)}));
+  rows.forEach(x=>{
+    const row=document.querySelector('.home-location-row[data-location-home-user="'+x.p.id+'"]');
+    if(!row)return;
+    const meta=row.querySelector('.home-location-place');
+    const tm=row.querySelector('.home-location-time');
+    if(meta)meta.textContent=x.r?.sharing?locationLabel(x.r):'ยังไม่ได้แชร์ตำแหน่ง';
+    if(tm)tm.textContent=x.r?.sharing?locationTimeText(x.r.updated_at):'';
+  });
+  const me=locationFor(S.user?.id),pa=locationFor(S.partner?.id),km=haversineKm(me,pa);
+  const d=document.querySelector('.home-location-distance');
+  if(d){
+    d.innerHTML=(me?.sharing&&pa?.sharing&&km!=null)
+      ? `💙 <b>${etaText(km)}</b><div class="tiny muted">ห่างกันประมาณ ${km<1?Math.round(km*1000)+' เมตร':km.toFixed(1)+' กม.'}</div>`
+      : `🔒 แชร์ตำแหน่งของทั้งสองคนเพื่อดูระยะห่าง`;
+  }
+}
+
+async function refreshLocations(){if(!S.couple?.id)return;try{S.locations=await api('/rest/v1/couple_locations?couple_id=eq.'+encodeURIComponent(S.couple.id)+'&select=*&order=updated_at.desc');}catch(e){S.locations=[]}if(S.page==='location'){drawLocationMarkers();updateLocationLiveText()}else if(S.page==='home'){updateHomeLocationLiveText()}}
 async function pushCurrentLocation(pos){
   if(!pos?.coords || !S.user?.id || !S.couple?.id) return;
   const c=pos.coords;
@@ -622,9 +668,9 @@ async function stopLocationShare(){if(locationWatchId!==null){navigator.geolocat
 
 let locationPollingTimer=null;
 function stopLocationPolling(){if(locationPollingTimer){clearInterval(locationPollingTimer);locationPollingTimer=null;}}
-function startLocationPolling(){stopLocationPolling(); if(S.page!=="location")return; refreshLocations(); locationPollingTimer=setInterval(()=>{if(S.page==="location"&&!document.hidden)refreshLocations();},10000);}
+function startLocationPolling(){stopLocationPolling(); if(!["location","home"].includes(S.page))return; refreshLocations(); locationPollingTimer=setInterval(()=>{if(["location","home"].includes(S.page)&&!document.hidden)refreshLocations();},10000);}
 
-function render(){const f={home,reminders,memories,days,chat,pets,petsPage,more,cycles,location:locationPage};el("root").innerHTML=shell((f[S.page]||home)());if(S.page==="location"){setTimeout(()=>{initLocationMap();refreshLocations();startLocationPolling()},0)} if(S.page==="chat"){setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i)i.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage()}}},0)}}
+function render(){const f={home,reminders,memories,days,chat,pets,petsPage,more,cycles,location:locationPage};el("root").innerHTML=shell((f[S.page]||home)());if(S.page==="location"){setTimeout(()=>{initLocationMap();refreshLocations();startLocationPolling()},0)}else if(S.page==="home"){setTimeout(()=>startLocationPolling(),0)} if(S.page==="chat"){setTimeout(()=>{const b=document.querySelector(".chatbox");if(b)b.scrollTop=b.scrollHeight;const i=el("chatText");if(i)i.onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMessage()}}},0)}}
 function changePhoto(slot){el(slot==="cover"?"coverFile":slot==="me"?"meFile":slot==="partner"?"partnerFile":"petFile").click()}
 async function uploadPhoto(slot,input){
  const file=input.files?.[0];if(!file)return;
