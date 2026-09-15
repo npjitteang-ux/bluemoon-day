@@ -53,6 +53,16 @@ h1{font-size:34px;margin:11px 0 4px}h2{font-size:30px}.muted{color:var(--muted)}
 
 .location-map{height:340px;border-radius:20px;overflow:hidden;border:1px solid var(--line);background:#eef3f8}.location-map .leaflet-container{font-family:inherit}.location-person{display:flex;align-items:center;gap:10px}.location-dot{width:12px;height:12px;border-radius:50%;background:#5572aa;box-shadow:0 0 0 5px rgba(85,114,170,.12)}.location-meta{font-size:12px;color:var(--muted)}.location-eta{font-size:24px;font-weight:800;color:#5572aa}.location-status{font-size:13px;color:var(--muted)}
 </style>
+
+<style>
+.loc-wrap{display:grid;gap:12px}
+.loc-map{height:340px;border-radius:20px;overflow:hidden;border:1px solid rgba(0,0,0,.08);background:#eef2f4}
+.loc-status{padding:12px 14px;border-radius:16px;background:#f7f5f0}
+.loc-person{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.06)}
+.loc-person:last-child{border-bottom:0}
+.loc-dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:7px;background:#5b7cfa}
+.loc-muted{font-size:12px;color:#7b7b7b}
+</style>
 </head>
 <body>
 <div id="root"><div class="app"><div class="login"><div class="card"><div class="spinner"></div><p style="text-align:center">กำลังเปิด BlueMoon Days…</p></div></div></div></div>
@@ -874,6 +884,153 @@ if("serviceWorker" in navigator){
 setInterval(()=>{if(S.page==="chat"&&!document.hidden)refreshChat(true)},5000);
 
 boot();
+</script>
+
+<script>
+/* BlueMoon Days V63 — isolated live location feature */
+(function(){
+  let bmLocMap=null, bmLocWatch=null, bmLocTimer=null, bmLocMarkers={};
+  let bmLocLeafletPromise=null;
+
+  function bmLoadLeaflet(){
+    if(bmLocLeafletPromise) return bmLocLeafletPromise;
+    bmLocLeafletPromise=new Promise((resolve,reject)=>{
+      if(window.L) return resolve(window.L);
+      const css=document.createElement('link'); css.rel='stylesheet';
+      css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(css);
+      const s=document.createElement('script'); s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      s.onload=()=>resolve(window.L); s.onerror=reject; document.head.appendChild(s);
+    });
+    return bmLocLeafletPromise;
+  }
+
+  function bmFmtAgo(ts){
+    if(!ts) return 'ยังไม่มีตำแหน่ง';
+    const sec=Math.max(0,Math.floor((Date.now()-new Date(ts).getTime())/1000));
+    return sec<60 ? sec+' วินาทีที่แล้ว' : Math.floor(sec/60)+' นาทีที่แล้ว';
+  }
+  function bmDist(a,b){
+    const R=6371, p=Math.PI/180;
+    const dLat=(b.lat-a.lat)*p, dLon=(b.lng-a.lng)*p;
+    const x=Math.sin(dLat/2)**2+Math.cos(a.lat*p)*Math.cos(b.lat*p)*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+  function bmEta(mins){
+    if(mins<.1) return 'อยู่ใกล้กันมาก';
+    return 'ประมาณ '+Math.max(1,Math.round(mins))+' นาทีถึงกัน';
+  }
+  async function bmReverse(lat,lng){
+    try{
+      const u='https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+encodeURIComponent(lat)+'&longitude='+encodeURIComponent(lng)+'&localityLanguage=th';
+      const r=await fetch(u,{headers:{'Accept':'application/json'}});
+      if(!r.ok) return '';
+      const d=await r.json();
+      return d.locality || d.city || d.principalSubdivision || d.countryName || '';
+    }catch(e){return ''}
+  }
+  async function bmGetLocs(){
+    if(!window.S || !S.couple) return [];
+    try{
+      return await api('/rest/v1/live_locations?couple_id='+encodeURIComponent(S.couple.id)+'&select=*');
+    }catch(e){return []}
+  }
+  async function bmUpsert(pos){
+    if(!window.S || !S.user || !S.couple) return;
+    const c=S.couple.id, uid=S.user.id, crd=pos.coords;
+    try{
+      await api('/rest/v1/live_locations?on_conflict=user_id',{
+        method:'POST',
+        headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify({user_id:uid,couple_id:c,latitude:crd.latitude,longitude:crd.longitude,accuracy_m:crd.accuracy,updated_at:new Date().toISOString()})
+      });
+    }catch(e){ console.warn('location save failed',e) }
+  }
+  async function bmRender(){
+    const box=document.getElementById('bmLocMap');
+    if(!box) return;
+    const L=await bmLoadLeaflet();
+    const rows=await bmGetLocs();
+    const pts=rows.map(x=>({id:x.user_id,lat:+x.latitude,lng:+x.longitude,updated_at:x.updated_at,accuracy:x.accuracy_m})).filter(x=>Number.isFinite(x.lat)&&Number.isFinite(x.lng));
+    if(!bmLocMap){
+      bmLocMap=L.map(box,{zoomControl:true}).setView(pts[0]?[pts[0].lat,pts[0].lng]:[13.7563,100.5018],13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(bmLocMap);
+    }
+    const names={};
+    try{
+      (S.profile? [S.profile]:[]).forEach(p=>names[p.id]=p.name||'ฉัน');
+    }catch(e){}
+    for(const p of pts){
+      const label=p.id===S.user?.id ? 'ฉัน' : 'คนรัก';
+      const m=bmLocMarkers[p.id] || L.marker([p.lat,p.lng]).addTo(bmLocMap);
+      m.setLatLng([p.lat,p.lng]).bindPopup('<b>'+label+'</b><br><span class="loc-muted">'+bmFmtAgo(p.updated_at)+'</span>');
+      bmLocMarkers[p.id]=m;
+    }
+    if(pts.length===1) bmLocMap.setView([pts[0].lat,pts[0].lng],15);
+    if(pts.length>=2){
+      const a=pts[0], b=pts[1], km=bmDist(a,b);
+      const bounds=L.latLngBounds(pts.map(p=>[p.lat,p.lng])); bmLocMap.fitBounds(bounds.pad(.35));
+      const mins=Math.max(1,km/35*60);
+      const eta=bmEta(mins);
+      const info=document.getElementById('bmLocInfo');
+      if(info) info.innerHTML='<b>🚗 '+eta+'</b><div class="loc-muted">ห่างกันประมาณ '+(km<1?Math.round(km*1000)+' เมตร':km.toFixed(1)+' กม.')+'</div>';
+    }
+    const list=document.getElementById('bmLocPeople');
+    if(list) list.innerHTML=pts.length?pts.map(p=>'<div class="loc-person"><div><span class="loc-dot"></span><b>'+(p.id===S.user?.id?'ฉัน':'คนรัก')+'</b><div class="loc-muted">อัปเดต '+bmFmtAgo(p.updated_at)+'</div></div></div>').join(''):'<div class="loc-muted">ยังไม่มีคนแชร์ตำแหน่ง</div>';
+  }
+  window.bmOpenLocation=async function(){
+    const page=document.getElementById('bmLocationPage');
+    if(!page) return;
+    await bmLoadLeaflet(); setTimeout(()=>bmLocMap?.invalidateSize(),150);
+    await bmRender();
+    if(bmLocTimer) clearInterval(bmLocTimer);
+    bmLocTimer=setInterval(bmRender,10000);
+  };
+  window.bmStartLocation=async function(){
+    if(!navigator.geolocation) return alert('อุปกรณ์นี้ไม่รองรับการระบุตำแหน่ง');
+    navigator.geolocation.getCurrentPosition(bmUpsert, e=>alert('เปิดสิทธิ์ตำแหน่งให้ BlueMoon Days ก่อนนะ'), {enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+    if(bmLocWatch) navigator.geolocation.clearWatch(bmLocWatch);
+    bmLocWatch=navigator.geolocation.watchPosition(bmUpsert,()=>{}, {enableHighAccuracy:true,maximumAge:8000,timeout:20000});
+    const b=document.getElementById('bmLocStart'); if(b) b.disabled=true;
+    await bmRender();
+  };
+  window.bmStopLocation=function(){
+    if(bmLocWatch) navigator.geolocation.clearWatch(bmLocWatch); bmLocWatch=null;
+    if(bmLocTimer) clearInterval(bmLocTimer); bmLocTimer=null;
+    const b=document.getElementById('bmLocStart'); if(b) b.disabled=false;
+    if(window.S?.user) fetch(URL_+'/rest/v1/live_locations?user_id=eq.'+encodeURIComponent(S.user.id),{method:'DELETE',headers:{apikey:KEY,Authorization:'Bearer '+KEY}});
+  };
+  window.bmLocationPageHtml=function(){
+    return '<div id="bmLocationPage" class="page"><div class="card loc-wrap"><div class="row"><div><b>📍 ตำแหน่งของเรา</b><div class="tiny muted">เห็นตำแหน่งล่าสุดของเราสองคน</div></div><button id="bmLocStart" class="pill" onclick="bmStartLocation()">แชร์ตำแหน่ง</button></div><div id="bmLocMap" class="loc-map"></div><div id="bmLocInfo" class="loc-status">ยังไม่มีตำแหน่งของเรา</div><div id="bmLocPeople" class="card" style="padding:8px 14px"></div><button class="pill" onclick="bmStopLocation()">หยุดแชร์ตำแหน่ง</button><div class="tiny muted">เก็บเฉพาะตำแหน่งล่าสุด ไม่เก็บเส้นทางย้อนหลัง</div></div></div>';
+  };
+})();
+</script>
+
+<script>
+(function(){
+  const oldGo=window.go;
+  if(typeof oldGo==='function'){
+    window.go=function(p){
+      if(p==='location'){
+        document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
+        let el=document.getElementById('bmLocationPage');
+        if(!el){document.body.insertAdjacentHTML('beforeend',window.bmLocationPageHtml());el=document.getElementById('bmLocationPage');}
+        el.classList.add('active'); window.bmOpenLocation(); return;
+      }
+      return oldGo.apply(this,arguments);
+    };
+  }
+  window.addEventListener('DOMContentLoaded',()=>{
+    setTimeout(()=>{
+      const more=document.querySelector('[data-page="more"]');
+      if(more && !document.getElementById('bmLocMoreBtn')){
+        const b=document.createElement('div'); b.id='bmLocMoreBtn'; b.className='section card';
+        b.innerHTML='<div class="row"><div><b>📍 ตำแหน่งของเรา</b><div class="tiny muted">ดูตำแหน่งล่าสุดและระยะห่างของเราสองคน</div></div><button class="pill" onclick="go(\\'location\\')">เปิด</button></div>';
+        more.appendChild(b);
+      }
+    },1200);
+  });
+})();
 </script>
 </body>
 </html>
